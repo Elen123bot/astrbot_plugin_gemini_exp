@@ -72,7 +72,8 @@ class GeminiExpPlugin(Star):
         self.waiting_users[user_id] = time.time() + 60
         
         # 发送提示消息，然后返回，而不是继续处理
-        yield event.plain_result(f"好的 {user_name}，请在60秒内发送您的文本描述和图片（如有）")
+        yield event.plain_result(f"/好的 {user_name}，请在60秒内发送您的文本描述和图片（如有）")
+        return  # 确保在这里返回，避免继续执行
     
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_follow_up(self, event: AstrMessageEvent):
@@ -84,23 +85,31 @@ class GeminiExpPlugin(Star):
         
         user_id = event.get_sender_id()
         
-        # 忽略所有命令消息
+        # 忽略命令消息
         message_text = event.message_str.strip()
         if message_text.startswith("/"):
+            logger.debug(f"忽略命令消息: {message_text}")
             return
         
         # 检查用户是否在等待状态
         if user_id not in self.waiting_users:
+            logger.debug(f"用户 {user_id} 不在等待状态")
             return
         
         # 检查等待是否过期
         if time.time() > self.waiting_users[user_id]:
             del self.waiting_users[user_id]
+            logger.info(f"用户 {user_id} 等待超时")
             yield event.plain_result("等待超时，请重新发送命令。")
             return
         
         # 移除用户的等待状态，确保不会重复处理
-        del self.waiting_users[user_id]
+        expiry_time = self.waiting_users.pop(user_id, None)
+        if expiry_time is None:
+            logger.warning(f"用户 {user_id} 状态已被其他进程处理")
+            return
+        
+        logger.info(f"正在处理用户 {user_id} 的后续消息")
         
         # 获取消息内容
         message_chain = event.get_messages()
@@ -124,17 +133,18 @@ class GeminiExpPlugin(Star):
                         img = PILImage.open(temp_img_path)
                         image_list.append(img)
                         logger.info(f"成功下载图片: {img_url}")
-                        
                 except Exception as e:
                     logger.error(f"处理图片时出错: {str(e)}")
                     yield event.plain_result(f"无法处理图片，请稍后再试或尝试其他图片。错误: {str(e)}")
                     return
         
         if not text_content and not image_list:
+            logger.info(f"用户 {user_id} 没有提供任何内容")
             yield event.plain_result("请提供文本描述或图片。")
             return
         
         # 发送处理中的消息
+        logger.info(f"开始处理用户 {user_id} 的请求")
         yield event.plain_result("正在处理您的请求，请稍候...")
         
         # 调用Gemini API
