@@ -29,6 +29,7 @@ class GeminiExpPlugin(Star):
         self.command_aliases = config.get("command_aliases", ["gem", "edit"])
         self.model = config.get("model", "gemini-2.0-flash-exp")
         self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: expiry_time}
+        self.last_command_ids = {}  # 存储最后一个命令的消息ID
         self.temp_dir = tempfile.mkdtemp(prefix="gemini_exp_")
         
         # 检查并安装必要的包
@@ -68,22 +69,39 @@ class GeminiExpPlugin(Star):
         user_id = event.get_sender_id()
         user_name = event.get_sender_name()
         
+        # 存储当前命令的消息ID，以便后续过滤
+        if hasattr(event, 'message_id'):
+            self.last_command_ids[user_id] = event.message_id
+        
         # 设置等待状态，有效期60秒
         self.waiting_users[user_id] = time.time() + 60
         
         # 发送提示消息，然后返回，而不是继续处理
-        yield event.plain_result(f"/好的 {user_name}，请在60秒内发送您的文本描述和图片（如有）")
-        return  # 确保在这里返回，避免继续执行
+        yield event.plain_result(f"好的 {user_name}，请在60秒内发送您的文本描述和图片（如有）")
+        return
     
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_follow_up(self, event: AstrMessageEvent):
         """处理用户的后续消息"""
-        # 检查event类型
+        
+        # 确保这是一个消息事件
         if not isinstance(event, AstrMessageEvent):
             logger.error(f"handle_follow_up收到了错误类型的参数: {type(event)}")
             return
         
+        # 获取用户ID
         user_id = event.get_sender_id()
+        
+        # 检查是否是机器人自己的消息
+        if hasattr(event, 'is_bot') and event.is_bot:
+            logger.debug(f"忽略机器人自己的消息")
+            return
+            
+        # 检查消息ID - 确保不是处理命令消息本身
+        if hasattr(event, 'message_id') and user_id in self.last_command_ids:
+            if event.message_id == self.last_command_ids[user_id]:
+                logger.debug(f"忽略与命令相同ID的消息: {event.message_id}")
+                return
         
         # 忽略命令消息
         message_text = event.message_str.strip()
@@ -96,9 +114,14 @@ class GeminiExpPlugin(Star):
             logger.debug(f"用户 {user_id} 不在等待状态")
             return
         
+        # 打印更多调试信息
+        logger.info(f"收到用户 {user_id} 的后续消息: {message_text[:30]}...")
+        
         # 检查等待是否过期
         if time.time() > self.waiting_users[user_id]:
             del self.waiting_users[user_id]
+            if user_id in self.last_command_ids:
+                del self.last_command_ids[user_id]
             logger.info(f"用户 {user_id} 等待超时")
             yield event.plain_result("等待超时，请重新发送命令。")
             return
@@ -109,7 +132,11 @@ class GeminiExpPlugin(Star):
             logger.warning(f"用户 {user_id} 状态已被其他进程处理")
             return
         
-        logger.info(f"正在处理用户 {user_id} 的后续消息")
+        # 清除命令ID记录
+        if user_id in self.last_command_ids:
+            del self.last_command_ids[user_id]
+        
+        logger.info(f"开始处理用户 {user_id} 的后续消息")
         
         # 获取消息内容
         message_chain = event.get_messages()
@@ -246,8 +273,6 @@ class GeminiExpPlugin(Star):
         except Exception as e:
             logger.error(f"Gemini API调用失败: {str(e)}")
             yield event.plain_result(f"处理失败: {str(e)}")
-
-
 
     
     async def process_with_gemini(self, text, images):
