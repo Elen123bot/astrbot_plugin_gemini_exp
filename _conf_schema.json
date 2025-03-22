@@ -5,5 +5,20 @@
         "hint": "请输入您的 Gemini API 密钥",
         "default": "",
         "obvious_hint": true
+    },
+    "base_url": {
+        "description": "Gemini API 基础URL",
+        "type": "string",
+        "hint": "Gemini API的基础URL，如无特殊需求请保留默认值",
+        "default": "https://dainty-liger-d8726e.netlify.app",
+        "obvious_hint": false
+    },
+    "command_aliases": {
+        "description": "命令别名列表",
+        "type": "array",
+        "item_type": "string",
+        "hint": "触发Gemini模型的命令别名列表（如gem, edit等）",
+        "default": ["gem", "edit"],
+        "obvious_hint": false
     }
 }

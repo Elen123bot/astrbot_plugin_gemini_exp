@@ -25,6 +25,8 @@ class GeminiExpPlugin(Star):
         super().__init__(context)
         self.config = config
         self.api_key = config.get("api_key", "")
+        self.base_url = config.get("base_url", "https://generativelanguage.googleapis.com")
+        self.command_aliases = config.get("command_aliases", ["gem", "edit"])
         self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: expiry_time}
         self.temp_dir = tempfile.mkdtemp(prefix="gemini_exp_")
         
@@ -47,13 +49,13 @@ class GeminiExpPlugin(Star):
         """安装必要的包"""
         try:
             import subprocess
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "google-generativeai", "pillow"])
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "google-genai", "pillow"])
             print("成功安装必要的包")
         except subprocess.CalledProcessError as e:
             print(f"安装包失败: {str(e)}")
             raise
         
-    @filter.command("gemexp")
+    @filter.command("gemexp", alias=[])
     async def gemini_exp(self, event: AstrMessageEvent):
         '''使用Gemini 2.0 Flash Experimental模型进行多模态交互'''
         # 检查API密钥是否配置
@@ -242,7 +244,7 @@ class GeminiExpPlugin(Star):
         try:
             # 配置自定义 base_url
             http_options = HttpOptions(
-                base_url="https://dainty-liger-d8726e.netlify.app"
+                base_url=self.base_url
             )
 
             # 初始化客户端
@@ -330,3 +332,15 @@ class GeminiExpPlugin(Star):
                 os.rmdir(self.temp_dir)
             except Exception as e:
                 logger.error(f"清理临时文件时出错: {str(e)}")
+
+    # 重写initialize方法动态设置别名
+    async def initialize(self):
+        '''插件初始化时调用'''
+        # 获取命令处理方法
+        method = getattr(self, 'gemini_exp')
+        
+        # 获取filter属性
+        if hasattr(method, '__astrbot_filter__'):
+            # 更新别名
+            method.__astrbot_filter__.alias = self.command_aliases
+            logger.info(f"Gemini插件已设置命令别名: {self.command_aliases}")
