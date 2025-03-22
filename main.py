@@ -29,7 +29,7 @@ class GeminiExpPlugin(Star):
         self.command_aliases = config.get("command_aliases", ["gem", "edit"])
         self.model = config.get("model", "gemini-2.0-flash-exp")
         self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: expiry_time}
-        self.last_command_ids = {}  # 存储最后一个命令的消息ID
+        self.last_command_time = {}  # 存储最后命令的时间戳
         self.temp_dir = tempfile.mkdtemp(prefix="gemini_exp_")
         
         # 检查并安装必要的包
@@ -69,9 +69,8 @@ class GeminiExpPlugin(Star):
         user_id = event.get_sender_id()
         user_name = event.get_sender_name()
         
-        # 存储当前命令的消息ID，以便后续过滤
-        if hasattr(event, 'message_id'):
-            self.last_command_ids[user_id] = event.message_id
+        # 记录命令的时间戳
+        self.last_command_time[user_id] = time.time()
         
         # 设置等待状态，有效期60秒
         self.waiting_users[user_id] = time.time() + 60
@@ -92,39 +91,44 @@ class GeminiExpPlugin(Star):
         # 获取用户ID
         user_id = event.get_sender_id()
         
-        # 检查是否是机器人自己的消息
-        if hasattr(event, 'is_bot') and event.is_bot:
-            logger.debug(f"忽略机器人自己的消息")
-            return
-            
-        # 检查消息ID - 确保不是处理命令消息本身
-        if hasattr(event, 'message_id') and user_id in self.last_command_ids:
-            if event.message_id == self.last_command_ids[user_id]:
-                logger.debug(f"忽略与命令相同ID的消息: {event.message_id}")
-                return
-        
         # 忽略命令消息
         message_text = event.message_str.strip()
         if message_text.startswith("/"):
             logger.debug(f"忽略命令消息: {message_text}")
+            return
+            
+        # 严格检查 - 忽略包含触发词的消息
+        # 这是为了避免将命令本身当作用户输入
+        if "gemexp" in message_text.lower() or any(alias in message_text.lower() for alias in self.command_aliases):
+            logger.debug(f"忽略包含触发词的消息: {message_text}")
             return
         
         # 检查用户是否在等待状态
         if user_id not in self.waiting_users:
             logger.debug(f"用户 {user_id} 不在等待状态")
             return
-        
-        # 打印更多调试信息
-        logger.info(f"收到用户 {user_id} 的后续消息: {message_text[:30]}...")
+            
+        # 时间戳检查 - 确保消息是在命令之后一段时间发送的
+        # 这是为了避免将命令前后的消息当作用户输入
+        current_time = time.time()
+        if user_id in self.last_command_time:
+            cmd_time = self.last_command_time[user_id]
+            # 忽略太接近命令时间的消息 (1秒内)
+            if current_time - cmd_time < 1.0:
+                logger.debug(f"忽略太接近命令时间的消息，时间差: {current_time - cmd_time}秒")
+                return
         
         # 检查等待是否过期
-        if time.time() > self.waiting_users[user_id]:
+        if current_time > self.waiting_users[user_id]:
             del self.waiting_users[user_id]
-            if user_id in self.last_command_ids:
-                del self.last_command_ids[user_id]
+            if user_id in self.last_command_time:
+                del self.last_command_time[user_id]
             logger.info(f"用户 {user_id} 等待超时")
             yield event.plain_result("等待超时，请重新发送命令。")
             return
+        
+        # 打印更多调试信息
+        logger.info(f"收到用户 {user_id} 的后续消息: {message_text[:30]}...")
         
         # 移除用户的等待状态，确保不会重复处理
         expiry_time = self.waiting_users.pop(user_id, None)
@@ -132,9 +136,9 @@ class GeminiExpPlugin(Star):
             logger.warning(f"用户 {user_id} 状态已被其他进程处理")
             return
         
-        # 清除命令ID记录
-        if user_id in self.last_command_ids:
-            del self.last_command_ids[user_id]
+        # 清除命令时间记录
+        if user_id in self.last_command_time:
+            del self.last_command_time[user_id]
         
         logger.info(f"开始处理用户 {user_id} 的后续消息")
         
