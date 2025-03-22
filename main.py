@@ -119,7 +119,36 @@ class GeminiExpPlugin(Star):
         
         # 获取消息内容
         message_chain = event.get_messages()
-        self.text_content = event.message_str.removeprefix("gemexp ").strip()
+        self.text_content = event.message_str.removeprefix("gemexp").strip() if self.text_content == "" else self.text_content
+
+        # 获取消息的reply消息
+        for msg in message_chain:
+            if isinstance(msg, Reply):
+                # 获取到Reply消息
+                reply_msg = msg
+                # 获取Reply消息中的消息链
+                reply_chain = reply_msg.chain
+                logger.info(f"检测到回复消息，发送者: {reply_msg.sender_nickname}({reply_msg.sender_id})")
+                
+                # 遍历Reply消息链寻找图片
+                for reply_component in reply_chain:
+                    if isinstance(reply_component, Image):
+                        try:
+                            # 获取图片URL
+                            img_url = None
+                            if hasattr(reply_component, 'url') and reply_component.url:
+                                img_url = reply_component.url
+                            
+                            if img_url:
+                                # 使用框架提供的下载函数
+                                temp_img_path = await download_image_by_url(img_url)
+                                
+                                # 使用PIL打开图片
+                                img = PILImage.open(temp_img_path)
+                                self.image_list.append(img)
+                                logger.info(f"成功从回复消息下载图片: {img_url}")
+                        except Exception as e:
+                            logger.error(f"处理回复图片时出错: {str(e)}")
         
         # 从消息链中提取图片
         for msg in message_chain:
