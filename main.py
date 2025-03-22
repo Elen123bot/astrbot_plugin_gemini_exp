@@ -6,7 +6,6 @@ from astrbot.api.message_components import *
 import asyncio
 import sys
 import importlib
-import requests
 from io import BytesIO
 import time
 import tempfile
@@ -26,23 +25,18 @@ class GeminiExpPlugin(Star):
         self.config = config
         self.api_key = config.get("api_key", "")
         self.base_url = config.get("base_url", "https://generativelanguage.googleapis.com")
-        self.command_aliases = config.get("command_aliases", ["gem", "edit"])
         self.model = config.get("model", "gemini-2.0-flash-exp")
-        self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: expiry_time}
+        self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: {"expiry_time": time, "text_content": "", "image_list": []}}
         self.temp_dir = tempfile.mkdtemp(prefix="gemini_exp_")
-        self.image_list = []  # 存储图片列表
-        self.text_content = ""  # 存储文本内容
         
         # 检查并安装必要的包
         if not self._check_packages():
             self._install_packages()
         
-
-        
     def _check_packages(self) -> bool:
         """检查是否安装了需要的包"""
         try:
-            importlib.import_module('google')
+            importlib.import_module('google.genai')
             importlib.import_module('PIL')
             return True
         except ImportError:
@@ -71,133 +65,146 @@ class GeminiExpPlugin(Star):
         user_name = event.get_sender_name()
                 
         # 设置等待状态，有效期60秒
-        self.waiting_users[user_id] = time.time() + 60
+        self.waiting_users[user_id] = {
+            "expiry_time": time.time() + 60,
+            "text_content": "",
+            "image_list": []
+        }
         
         # 发送提示消息，然后返回，而不是继续处理
         yield event.plain_result(f"好的 {user_name}，请在60秒内发送您的文本描述和图片（如有）")
         return
     
+    async def extract_image_from_component(self, component, user_data):
+        """从消息组件中提取图片
+        
+        Args:
+            component: 消息组件
+            user_data: 用户数据字典，包含图片列表
+        
+        Returns:
+            bool: 是否成功提取图片
+        """
+        if not isinstance(component, Image):
+            return False
+            
+        try:
+            # 获取图片URL
+            img_url = None
+            if hasattr(component, 'url') and component.url:
+                img_url = component.url
+            
+            if img_url:
+                # 使用框架提供的下载函数
+                temp_img_path = await download_image_by_url(img_url)
+                
+                # 使用PIL打开图片
+                img = PILImage.open(temp_img_path)
+                user_data["image_list"].append(img)
+                logger.info(f"成功下载图片: {img_url}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"处理图片时出错: {str(e)}")
+            raise e
+            
+        return False
+    
+    async def extract_images_from_chain(self, message_chain, user_data):
+        """从消息链中提取所有图片
+        
+        Args:
+            message_chain: 消息链
+            user_data: 用户数据字典，包含图片列表
+            
+        Returns:
+            int: 提取的图片数量
+        """
+        count = 0
+        for msg in message_chain:
+            if isinstance(msg, Image):
+                success = await self.extract_image_from_component(msg, user_data)
+                if success:
+                    count += 1
+            elif isinstance(msg, Reply):
+                # 处理回复消息
+                reply_chain = msg.chain
+                logger.info(f"检测到回复消息，发送者: {msg.sender_nickname}({msg.sender_id})")
+                
+                # 从回复消息中提取图片
+                reply_count = await self.extract_images_from_chain(reply_chain, user_data)
+                count += reply_count
+                
+        return count
+    
     @filter.event_message_type(EventMessageType.ALL)
     async def handle_follow_up(self, event: AstrMessageEvent):
         """处理用户的后续消息"""
         
-        # 确保这是一个消息事件
+        # 1. 快速初步检查 - 过滤明显不需要处理的消息
         if not isinstance(event, AstrMessageEvent):
             logger.error(f"handle_follow_up收到了错误类型的参数: {type(event)}")
             return
         
-        # 获取用户ID
         user_id = event.get_sender_id()
-        
-        # 忽略命令消息
         message_text = event.message_str.strip()
-        if message_text.startswith("/"):
-            logger.debug(f"忽略命令消息: {message_text}")
-            return
-            
-        # 严格检查 - 忽略包含触发词的消息
-        # 这是为了避免将命令本身当作用户输入
-        if message_text.lower() == 'gemexp':
-            logger.debug(f"忽略包含触发词的消息: {message_text}")
+        
+        # 忽略命令消息和触发词
+        if message_text.startswith("/") or message_text.lower() == "gemexp":
+            logger.debug(f"忽略命令消息或触发词: {message_text}")
             return
         
-        # 检查用户是否在等待状态
+        # 2. 会话状态检查
         if user_id not in self.waiting_users:
             logger.debug(f"用户 {user_id} 不在等待状态")
             return
         
-        # 检查等待是否过期
-        if time.time() > self.waiting_users[user_id]:
+        user_data = self.waiting_users[user_id]
+        if time.time() > user_data["expiry_time"]:
             del self.waiting_users[user_id]
             yield event.plain_result("等待超时，请重新发送命令。")
             return
-        
-        # 打印更多调试信息
-        logger.info(f"收到用户 {user_id} 的后续消息: {message_text[:30]}...")
-        
-        logger.info(f"开始处理用户 {user_id} 的后续消息")
-        
-        # 获取消息内容
-        message_chain = event.get_messages()
-        self.text_content = event.message_str.removeprefix("gemexp").strip() if self.text_content == "" else self.text_content
-
-        # 获取消息的reply消息
-        for msg in message_chain:
-            if isinstance(msg, Reply):
-                # 获取到Reply消息
-                reply_msg = msg
-                # 获取Reply消息中的消息链
-                reply_chain = reply_msg.chain
-                logger.info(f"检测到回复消息，发送者: {reply_msg.sender_nickname}({reply_msg.sender_id})")
                 
-                # 遍历Reply消息链寻找图片
-                for reply_component in reply_chain:
-                    if isinstance(reply_component, Image):
-                        try:
-                            # 获取图片URL
-                            img_url = None
-                            if hasattr(reply_component, 'url') and reply_component.url:
-                                img_url = reply_component.url
-                            
-                            if img_url:
-                                # 使用框架提供的下载函数
-                                temp_img_path = await download_image_by_url(img_url)
-                                
-                                # 使用PIL打开图片
-                                img = PILImage.open(temp_img_path)
-                                self.image_list.append(img)
-                                logger.info(f"成功从回复消息下载图片: {img_url}")
-                        except Exception as e:
-                            logger.error(f"处理回复图片时出错: {str(e)}")
+        # 3. 提取用户输入 - 先检查文本内容（快速操作）
+        if user_data["text_content"] == "":
+            cleaned_text = message_text.replace("gemexp", "").strip()
+            user_data["text_content"] = cleaned_text
         
-        # 从消息链中提取图片
-        for msg in message_chain:
-            if isinstance(msg, Image):
-                try:
-                    # 获取图片URL
-                    img_url = None
-                    if hasattr(msg, 'url') and msg.url:
-                        img_url = msg.url
-                    
-                    if img_url:
-                        # 使用框架提供的下载函数
-                        temp_img_path = await download_image_by_url(img_url)
-                        
-                        # 使用PIL打开图片
-                        img = PILImage.open(temp_img_path)
-                        self.image_list.append(img)
-                        logger.info(f"成功下载图片: {img_url}")
-                except Exception as e:
-                    logger.error(f"处理图片时出错: {str(e)}")
-                    yield event.plain_result(f"无法处理图片，请稍后再试或尝试其他图片。错误: {str(e)}")
-                    return
-        
-        if not self.text_content:
-            logger.info(f"用户 {user_id} 没有提供文本描述")
-            yield event.plain_result("请提供想要编辑的内容。")
+        # 4. 提取图片 - 只有文本内容存在时才处理图片
+        message_chain = event.get_messages()
+        try:
+            image_count = await self.extract_images_from_chain(message_chain, user_data)
+            logger.info(f"从消息中提取到 {image_count} 张图片")
+        except Exception as e:
+            logger.error(f"提取图片时出错: {str(e)}")
+            yield event.plain_result(f"无法处理图片，请稍后再试或尝试其他图片。错误: {str(e)}")
             return
         
-        if not self.image_list:
+        # 5. 检查是否有文本 - 如果没有文本，提示用户
+        if not user_data["text_content"]:
+            logger.info(f"用户 {user_id} 没有提供任何文本")
+            yield event.plain_result("请描述想要编辑的内容。")
+            return
+        # 6. 检查是否有图片 - 如果没有图片，提示用户
+        if not user_data["image_list"]:
             logger.info(f"用户 {user_id} 没有提供任何图片")
             yield event.plain_result("请提供想要编辑的图片。")
             return
         
-        # 移除用户的等待状态，确保不会重复处理
-        expiry_time = self.waiting_users.pop(user_id, None)
-        if expiry_time is None:
-            logger.warning(f"用户 {user_id} 状态已被其他进程处理")
-            return
+        # 7. 准备处理数据
+        text_content = user_data["text_content"]
+        image_list = user_data["image_list"]
         
-        # 发送处理中的消息
-        logger.info(f"开始处理用户 {user_id} 的请求")
+        # 8. 移除用户等待状态并处理请求
+        del self.waiting_users[user_id]
+        
+        # 9. 发送处理中消息并调用API
+        logger.info(f"开始处理用户 {user_id} 的请求，文本长度: {len(text_content)}，图片数量: {len(image_list)}")
         yield event.plain_result("正在处理您的请求，请稍候...")
         
-        # 调用Gemini API
+        # 10. 调用API和处理结果
         try:
-            result = await self.process_with_gemini(self.text_content, self.image_list)
-            # 清空图片列表和文本内容
-            self.image_list.clear()
-            self.text_content = ""
+            result = await self.process_with_gemini(text_content, image_list)
             text_response = result.get('text', '无文本回复')
             image_paths = result.get('image_paths', [])
             
@@ -293,9 +300,6 @@ class GeminiExpPlugin(Star):
             
         except Exception as e:
             logger.error(f"Gemini API调用失败: {str(e)}")
-            # 清空图片列表和文本内容
-            self.image_list.clear()
-            self.text = ""
             yield event.plain_result(f"处理失败: {str(e)}")
 
     
@@ -392,15 +396,3 @@ class GeminiExpPlugin(Star):
                 os.rmdir(self.temp_dir)
             except Exception as e:
                 logger.error(f"清理临时文件时出错: {str(e)}")
-
-    # 重写initialize方法动态设置别名
-    async def initialize(self):
-        '''插件初始化时调用'''
-        # 获取命令处理方法
-        method = getattr(self, 'gemini_exp')
-        
-        # 获取filter属性
-        if hasattr(method, '__astrbot_filter__'):
-            # 更新别名
-            method.__astrbot_filter__.alias = self.command_aliases
-            logger.info(f"Gemini插件已设置命令别名: {self.command_aliases}")
