@@ -115,17 +115,11 @@ class GeminiExpPlugin(Star):
         # 打印更多调试信息
         logger.info(f"收到用户 {user_id} 的后续消息: {message_text[:30]}...")
         
-        # 移除用户的等待状态，确保不会重复处理
-        expiry_time = self.waiting_users.pop(user_id, None)
-        if expiry_time is None:
-            logger.warning(f"用户 {user_id} 状态已被其他进程处理")
-            return
-        
         logger.info(f"开始处理用户 {user_id} 的后续消息")
         
         # 获取消息内容
         message_chain = event.get_messages()
-        self.text_content = event.message_str
+        self.text_content = event.message_str.removeprefix("gemexp ").strip()
         
         # 从消息链中提取图片
         for msg in message_chain:
@@ -157,6 +151,12 @@ class GeminiExpPlugin(Star):
         if not self.image_list:
             logger.info(f"用户 {user_id} 没有提供任何图片")
             yield event.plain_result("请提供想要编辑的图片。")
+            return
+        
+        # 移除用户的等待状态，确保不会重复处理
+        expiry_time = self.waiting_users.pop(user_id, None)
+        if expiry_time is None:
+            logger.warning(f"用户 {user_id} 状态已被其他进程处理")
             return
         
         # 发送处理中的消息
@@ -264,6 +264,9 @@ class GeminiExpPlugin(Star):
             
         except Exception as e:
             logger.error(f"Gemini API调用失败: {str(e)}")
+            # 清空图片列表和文本内容
+            self.image_list.clear()
+            self.text = ""
             yield event.plain_result(f"处理失败: {str(e)}")
 
     
