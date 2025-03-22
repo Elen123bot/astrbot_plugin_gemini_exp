@@ -29,8 +29,9 @@ class GeminiExpPlugin(Star):
         self.command_aliases = config.get("command_aliases", ["gem", "edit"])
         self.model = config.get("model", "gemini-2.0-flash-exp")
         self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: expiry_time}
-        self.last_command_time = {}  # 存储最后命令的时间戳
         self.temp_dir = tempfile.mkdtemp(prefix="gemini_exp_")
+        self.image_list = []  # 存储图片列表
+        self.text_content = ""  # 存储文本内容
         
         # 检查并安装必要的包
         if not self._check_packages():
@@ -68,10 +69,7 @@ class GeminiExpPlugin(Star):
         # 获取用户ID
         user_id = event.get_sender_id()
         user_name = event.get_sender_name()
-        
-        # 记录命令的时间戳
-        self.last_command_time[user_id] = time.time()
-        
+                
         # 设置等待状态，有效期60秒
         self.waiting_users[user_id] = time.time() + 60
         
@@ -99,7 +97,7 @@ class GeminiExpPlugin(Star):
             
         # 严格检查 - 忽略包含触发词的消息
         # 这是为了避免将命令本身当作用户输入
-        if "gemexp" in message_text.lower() or any(alias in message_text.lower() for alias in self.command_aliases):
+        if message_text.lower() == 'gemexp':
             logger.debug(f"忽略包含触发词的消息: {message_text}")
             return
         
@@ -107,23 +105,10 @@ class GeminiExpPlugin(Star):
         if user_id not in self.waiting_users:
             logger.debug(f"用户 {user_id} 不在等待状态")
             return
-            
-        # 时间戳检查 - 确保消息是在命令之后一段时间发送的
-        # 这是为了避免将命令前后的消息当作用户输入
-        current_time = time.time()
-        if user_id in self.last_command_time:
-            cmd_time = self.last_command_time[user_id]
-            # 忽略太接近命令时间的消息 (1秒内)
-            if current_time - cmd_time < 1.0:
-                logger.debug(f"忽略太接近命令时间的消息，时间差: {current_time - cmd_time}秒")
-                return
         
         # 检查等待是否过期
-        if current_time > self.waiting_users[user_id]:
+        if time.time() > self.waiting_users[user_id]:
             del self.waiting_users[user_id]
-            if user_id in self.last_command_time:
-                del self.last_command_time[user_id]
-            logger.info(f"用户 {user_id} 等待超时")
             yield event.plain_result("等待超时，请重新发送命令。")
             return
         
@@ -136,16 +121,11 @@ class GeminiExpPlugin(Star):
             logger.warning(f"用户 {user_id} 状态已被其他进程处理")
             return
         
-        # 清除命令时间记录
-        if user_id in self.last_command_time:
-            del self.last_command_time[user_id]
-        
         logger.info(f"开始处理用户 {user_id} 的后续消息")
         
         # 获取消息内容
         message_chain = event.get_messages()
-        text_content = event.message_str
-        image_list = []
+        self.text_content = event.message_str
         
         # 从消息链中提取图片
         for msg in message_chain:
@@ -162,16 +142,21 @@ class GeminiExpPlugin(Star):
                         
                         # 使用PIL打开图片
                         img = PILImage.open(temp_img_path)
-                        image_list.append(img)
+                        self.image_list.append(img)
                         logger.info(f"成功下载图片: {img_url}")
                 except Exception as e:
                     logger.error(f"处理图片时出错: {str(e)}")
                     yield event.plain_result(f"无法处理图片，请稍后再试或尝试其他图片。错误: {str(e)}")
                     return
         
-        if not text_content and not image_list:
-            logger.info(f"用户 {user_id} 没有提供任何内容")
-            yield event.plain_result("请提供文本描述或图片。")
+        if not self.text_content:
+            logger.info(f"用户 {user_id} 没有提供文本描述")
+            yield event.plain_result("请提供想要编辑的内容。")
+            return
+        
+        if not self.image_list:
+            logger.info(f"用户 {user_id} 没有提供任何图片")
+            yield event.plain_result("请提供想要编辑的图片。")
             return
         
         # 发送处理中的消息
@@ -180,7 +165,10 @@ class GeminiExpPlugin(Star):
         
         # 调用Gemini API
         try:
-            result = await self.process_with_gemini(text_content, image_list)
+            result = await self.process_with_gemini(self.text_content, self.image_list)
+            # 清空图片列表和文本内容
+            self.image_list.clear()
+            self.text_content = ""
             text_response = result.get('text', '无文本回复')
             image_paths = result.get('image_paths', [])
             
