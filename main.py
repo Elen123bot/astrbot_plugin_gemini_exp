@@ -27,6 +27,7 @@ class GeminiExpPlugin(Star):
         self.api_key = config.get("api_key", "")
         self.base_url = config.get("base_url", "https://generativelanguage.googleapis.com")
         self.command_aliases = config.get("command_aliases", ["gem", "edit"])
+        self.model = config.get("model", "gemini-2.0-flash-exp")
         self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: expiry_time}
         self.temp_dir = tempfile.mkdtemp(prefix="gemini_exp_")
         
@@ -273,7 +274,7 @@ class GeminiExpPlugin(Star):
             # 调用API
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model="models/gemini-2.0-flash-exp",
+                model=self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(response_modalities=['Text', 'Image'])
             )

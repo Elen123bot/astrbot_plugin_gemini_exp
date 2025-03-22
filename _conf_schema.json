@@ -20,5 +20,12 @@
         "hint": "触发Gemini模型的命令别名列表（如gem, edit等）",
         "default": ["gem", "edit"],
         "obvious_hint": false
+    },
+    "model": {
+        "description": "Gemini模型名称",
+        "type": "string",
+        "hint": "要使用的Gemini模型名称，官方base_url应搭配gemini-2.0-flash-exp/gemini-2.0-flash-exp-image-generation使用",
+        "default": "models/gemini-2.0-flash-exp",
+        "obvious_hint": false
     }
 }
