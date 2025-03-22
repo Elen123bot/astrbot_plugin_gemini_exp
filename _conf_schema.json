@@ -15,7 +15,7 @@
     },
     "command_aliases": {
         "description": "命令别名列表",
-        "type": "array",
+        "type": "list",
         "item_type": "string",
         "hint": "触发Gemini模型的命令别名列表（如gem, edit等）",
         "default": ["gem", "edit"],
