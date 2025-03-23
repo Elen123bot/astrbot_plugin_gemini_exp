@@ -28,6 +28,7 @@ class GeminiExpPlugin(Star):
         self.model = config.get("model", "gemini-2.0-flash-exp")
         self.waiting_users = {}  # 存储正在等待输入的用户 {user_id: {"expiry_time": time, "text_content": "", "image_list": []}}
         self.temp_dir = tempfile.mkdtemp(prefix="gemini_exp_")
+        self.is_translating = config.get("translate", False)
         
         # 检查并安装必要的包
         if not self._check_packages():
@@ -200,7 +201,21 @@ class GeminiExpPlugin(Star):
         
         # 9. 发送处理中消息并调用API
         logger.info(f"开始处理用户 {user_id} 的请求，文本长度: {len(text_content)}，图片数量: {len(image_list)}")
-        yield event.plain_result("正在处理您的请求，请稍候...")
+
+        # 9.5 调用LLM将text_content翻译为英语
+        if self.is_translating:
+            try:
+                llm_response = await self.context.get_using_provider().text_chat(
+                    prompt=text_content,
+                    system_prompt="Translate the following text to English without additional explanation:",
+                )
+                text_content = llm_response.completion_text
+            except Exception as e:
+                logger.error(f"翻译文本时出错: {str(e)}")
+                yield event.plain_result("翻译文本时出错，请稍后再试。")
+                return
+
+        yield event.plain_result(f"正在处理您的请求:{text_content}。请稍候...")
         
         # 10. 调用API和处理结果
         try:
