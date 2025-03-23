@@ -151,7 +151,7 @@ class GeminiExpPlugin(Star):
         message_text = event.message_str.strip()
         
         # 忽略命令消息和触发词
-        if message_text.startswith("/") or message_text.lower() == "gemexp":
+        if message_text.startswith("/") or message_text.lower() in ["gemexp", "edit", "ps"]:
             logger.debug(f"忽略命令消息或触发词: {message_text}")
             return
         
@@ -169,6 +169,8 @@ class GeminiExpPlugin(Star):
         # 3. 提取用户输入 - 先检查文本内容（快速操作）
         if user_data["text_content"] == "":
             cleaned_text = message_text.replace("gemexp", "").strip()
+            cleaned_text = cleaned_text.replace("edit", "").strip()
+            cleaned_text = cleaned_text.replace("ps", "").strip()
             user_data["text_content"] = cleaned_text
         
         # 4. 提取图片 - 只有文本内容存在时才处理图片
@@ -358,7 +360,7 @@ class GeminiExpPlugin(Star):
             )
             
             # 添加错误处理和日志记录
-            logger.info(f"Gemini API响应: {response}")
+            logger.debug(f"Gemini API响应: {response}")
             
             # 解析响应
             result = {'text': '', 'image_paths': []}
