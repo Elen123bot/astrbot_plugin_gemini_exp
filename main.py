@@ -53,7 +53,7 @@ class GeminiExpPlugin(Star):
             print(f"安装包失败: {str(e)}")
             raise
         
-    @filter.command("gemexp", alias=[])
+    @filter.command("gemexp", alias=["edit", "ps"])
     async def gemini_exp(self, event: AstrMessageEvent):
         '''使用Gemini 2.0 Flash Experimental模型进行多模态交互'''
         # 检查API密钥是否配置
@@ -215,7 +215,7 @@ class GeminiExpPlugin(Star):
                 yield event.plain_result("翻译文本时出错，请稍后再试。")
                 return
 
-        yield event.plain_result(f"正在处理您的请求:{text_content}。请稍候...")
+        yield event.plain_result(f"正在处理您的请求:{text_content} 请稍候...")
         
         # 10. 调用API和处理结果
         try:
