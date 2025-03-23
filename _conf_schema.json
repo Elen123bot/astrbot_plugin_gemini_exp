@@ -5,5 +5,26 @@
         "hint": "请输入您的 Gemini API 密钥",
         "default": "",
         "obvious_hint": true
+    },
+    "base_url": {
+        "description": "Gemini API 基础URL",
+        "type": "string",
+        "hint": "Gemini API的基础URL，如无特殊需求请保留默认值",
+        "default": "https://generativelanguage.googleapis.com",
+        "obvious_hint": false
+    },
+    "model": {
+        "description": "Gemini模型名称",
+        "type": "string",
+        "hint": "要使用的Gemini模型名称，官方base_url应搭配gemini-2.0-flash-exp/gemini-2.0-flash-exp-image-generation使用",
+        "default": "models/gemini-2.0-flash-exp",
+        "obvious_hint": false
+    },
+    "translate": {
+        "description": "翻译",
+        "type": "bool",
+        "hint": "是否翻译为英语",
+        "default": false,
+        "obvious_hint": false
     }
 }
