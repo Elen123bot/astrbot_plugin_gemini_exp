@@ -22,7 +22,7 @@
     },
     "translate": {
         "description": "翻译",
-        "type": "boolean",
+        "type": "bool",
         "hint": "是否翻译为英语",
         "default": false,
         "obvious_hint": false
